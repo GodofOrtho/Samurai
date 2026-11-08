@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="pt"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Samurai em Shinjuku</title>
+<script src="https://cesium.com/downloads/cesiumjs/releases/1.130/Build/Cesium/Cesium.js"></script>
+<link href="https://cesium.com/downloads/cesiumjs/releases/1.130/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+<style>
+html,body,#c{width:100%;height:100%;margin:0;overflow:hidden;background:#000;font-family:system-ui,sans-serif}
+#ui{position:fixed;top:8px;left:8px;display:flex;gap:6px;flex-wrap:wrap;z-index:5}
+button{background:#14142dcc;color:#fff;border:1px solid #ff3d8b;border-radius:8px;padding:8px 10px;font-size:14px;cursor:pointer}
+button:hover{background:#ff3d8b}
+#hud{position:fixed;left:8px;bottom:8px;right:8px;max-width:480px;background:#0a0a1ecc;color:#fff;border-left:4px solid #ff3d8b;padding:8px 10px;border-radius:8px;font-size:14px;z-index:5}
+</style></head><body>
+<div id="c"></div>
+<div id="ui"></div>
+<div id="hud">WASD / setas: andar e rodar. Shift+clique no chão: adicionar ponto à tua rota pelas ruas.</div>
+<script>
+// 1) Cola aqui a tua chave Google (Map Tiles API ativada). Ver README no chat.
+const GOOGLE_KEY = 'COLA_AQUI_A_TUA_CHAVE';
+
+// 2) Coordenadas APROXIMADAS. Corrige-as com Shift+clique no mapa (ficam escritas na consola do browser).
+const POIS = [
+  {n:'Hotel Wanokaede',          lat:35.6945, lon:139.7095, t:'Ponto de partida (6-12-9 Shinjuku).'},
+  {n:'Estação Shinjuku-sanchome', lat:35.6914, lon:139.7061, t:'Linhas Marunouchi, Fukutoshin e Toei Shinjuku.'},
+  {n:'Golden Gai',               lat:35.6940, lon:139.7046, t:'Centenas de barzinhos minúsculos. Vê o couvert à porta.'},
+  {n:'Kabukichō (Godzilla)',     lat:35.6955, lon:139.7003, t:'Néons e clubes de hostess. Ignora angariadores.'}
+];
+
+Cesium.GoogleMaps.defaultApiKey = GOOGLE_KEY;
+const viewer = new Cesium.Viewer('c', {
+  globe:false, baseLayer:false, baseLayerPicker:false, geocoder:false, homeButton:false,
+  sceneModePicker:false, navigationHelpButton:false, timeline:false, animation:false,
+  fullscreenButton:false, infoBox:false, selectionIndicator:false
+});
+viewer.scene.skyAtmosphere.show = true;
+let tiles;
+(async () => {
+  tiles = await Cesium.createGooglePhotorealistic3DTileset({onlyUsingWithGoogleGeocoder:true});
+  viewer.scene.primitives.add(tiles);
+})().catch(e => hud('Erro a carregar o Google 3D Tiles: verifica a chave e a Map Tiles API. ' + e));
+
+const hud = t => document.getElementById('hud').textContent = t;
+const R = Cesium.Math.toRadians;
+
+// ---- Samurai ----
+// Se existir samurai.glb ao lado deste ficheiro, é usado. Senão, usa-se um samurai feito de formas simples.
+let pos = {lat:POIS[0].lat, lon:POIS[0].lon, h:40}, heading = 0, moving = false;
+const P3 = (dh=0) => Cesium.Cartesian3.fromDegrees(pos.lon, pos.lat, pos.h + dh);
+const cb = dh => new Cesium.CallbackProperty(() => P3(dh), false);
+const parts = [];
+function part(dh, g, color) {
+  parts.push(viewer.entities.add({position:cb(dh), ...g, ...(color ? {} : {})}));
+}
+async function buildSamurai() {
+  let hasModel = false;
+  try { hasModel = (await fetch('samurai.glb', {method:'HEAD'})).ok; } catch(e) {}
+  if (hasModel) {
+    parts.push(viewer.entities.add({
+      position:cb(0),
+      orientation:new Cesium.CallbackProperty(() => Cesium.Transforms.headingPitchRollQuaternion(P3(0), new Cesium.HeadingPitchRoll(R(heading), 0, 0)), false),
+      model:{uri:'samurai.glb', minimumPixelSize:64, scale:1}
+    }));
+    return;
+  }
+  const C = Cesium.Color, o = () => new CallbackOrient();
+  const ori = () => new Cesium.CallbackProperty(() => Cesium.Transforms.headingPitchRollQuaternion(P3(0), new Cesium.HeadingPitchRoll(R(heading), 0, 0)), false);
+  const add = (dh, geo, extra={}) => parts.push(viewer.entities.add({position:cb(dh), orientation:ori(), ...geo}));
+  add(0.45, {cylinder:{length:0.9, topRadius:0.28, bottomRadius:0.36, material:C.fromCssColorString('#14142e')}});   // hakama
+  add(1.15, {cylinder:{length:0.8, topRadius:0.3, bottomRadius:0.3, material:C.fromCssColorString('#1f2a5a')}});    // quimono
+  add(0.95, {cylinder:{length:0.15, topRadius:0.32, bottomRadius:0.32, material:C.fromCssColorString('#c81e2e')}}); // obi
+  add(1.8,  {ellipsoid:{radii:new Cesium.Cartesian3(0.2,0.2,0.22), material:C.fromCssColorString('#ffd9b0')}});     // cabeça
+  add(2.08, {cylinder:{length:0.3, topRadius:0, bottomRadius:0.55, material:C.fromCssColorString('#b08a4a')}});     // kasa
+}
+buildSamurai();
+
+// ---- Controlo e câmara ----
+const K = {}; addEventListener('keydown', e => K[e.key.toLowerCase()] = 1); addEventListener('keyup', e => K[e.key.toLowerCase()] = 0);
+let queue = [], last = performance.now();
+const M = 111320;
+function step(dist, hdg) {
+  pos.lat += dist * Math.cos(R(hdg)) / M;
+  pos.lon += dist * Math.sin(R(hdg)) / (M * Math.cos(R(pos.lat)));
+}
+function bearing(a, b) {
+  const y = Math.sin(R(b.lon-a.lon)) * Math.cos(R(b.lat));
+  const x = Math.cos(R(a.lat))*Math.sin(R(b.lat)) - Math.sin(R(a.lat))*Math.cos(R(b.lat))*Math.cos(R(b.lon-a.lon));
+  return Cesium.Math.toDegrees(Math.atan2(y, x));
+}
+function dist(a, b) { return Math.hypot((b.lat-a.lat)*M, (b.lon-a.lon)*M*Math.cos(R(a.lat))); }
+
+viewer.scene.preRender.addEventListener(() => {
+  const now = performance.now(), dt = Math.min(0.05, (now-last)/1000); last = now;
+  const f = K.w || K.arrowup, b = K.s || K.arrowdown, l = K.a || K.arrowleft, r = K.d || K.arrowright;
+  moving = false;
+  if (f || b || l || r) queue = [];
+  if (queue.length) {
+    const q = queue[0], d = dist(pos, q);
+    if (d < 1.5) { const p = queue.shift(); if (p.t) hud(p.n + ': ' + p.t); }
+    else { heading = bearing(pos, q); step(Math.min(d, 7*dt), heading); moving = true; }
+  } else {
+    if (l) heading -= 90*dt; if (r) heading += 90*dt;
+    if (f) { step(7*dt, heading); moving = true; } if (b) { step(-4*dt, heading); moving = true; }
+  }
+  // altura do chão (edifícios/ruas do Google 3D)
+  if (viewer.scene.sampleHeightSupported) {
+    const h = viewer.scene.sampleHeight(Cesium.Cartographic.fromDegrees(pos.lon, pos.lat), parts);
+    if (h !== undefined) pos.h += (h - pos.h) * Math.min(1, dt*6);
+  }
+  viewer.camera.lookAt(P3(1.5), new Cesium.HeadingPitchRange(R(heading), R(-22), 18));
+});
+
+// ---- Botões ----
+const ui = document.getElementById('ui');
+const mk = (txt, fn) => { const bt = document.createElement('button'); bt.textContent = txt; bt.onclick = fn; ui.appendChild(bt); };
+POIS.forEach(p => mk(p.n.replace('Estação ',''), () => { queue = [{...p}]; }));
+mk('▶ Passeio pelos 4 pontos', () => { pos = {lat:POIS[0].lat, lon:POIS[0].lon, h:pos.h}; queue = POIS.slice(1).map(p => ({...p})); });
+mk('▶ Minha rota', () => { if (custom.length) queue = custom.map(c => ({...c})); });
+mk('Limpar rota', () => { custom = []; routeLine.show = false; });
+
+// ---- Rota própria: Shift+clique no chão ----
+let custom = [];
+const routeLine = viewer.entities.add({polyline:{positions:new Cesium.CallbackProperty(() => custom.map(c => Cesium.Cartesian3.fromDegrees(c.lon, c.lat, (c.h||40)+1)), false), width:5, material:Cesium.Color.fromCssColorString('#ff3d8b')}, show:false});
+const handler = new Cesium.ScreenSpaceEventHandler(viewer.canvas);
+handler.setInputAction(e => {
+  const c = viewer.scene.pickPosition(e.position); if (!c) return;
+  const g = Cesium.Cartographic.fromCartesian(c);
+  const pt = {lat:Cesium.Math.toDegrees(g.latitude), lon:Cesium.Math.toDegrees(g.longitude), h:g.height};
+  custom.push(pt); routeLine.show = true;
+  console.log('Ponto', custom.length, pt.lat.toFixed(6), pt.lon.toFixed(6));
+  hud('Ponto ' + custom.length + ' adicionado: ' + pt.lat.toFixed(5) + ', ' + pt.lon.toFixed(5) + '. Carrega em "Minha rota" quando acabares.');
+}, Cesium.ScreenSpaceEventType.LEFT_CLICK, Cesium.KeyboardEventModifier.SHIFT);
+</script>
+</body></html>
