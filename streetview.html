@@ -9,6 +9,7 @@ html,body{height:100%;margin:0;background:#000;font-family:system-ui,sans-serif;
 button{background:#14142dcc;color:#fff;border:1px solid #ff3d8b;border-radius:8px;padding:8px 10px;font-size:14px;cursor:pointer}
 button:active,button.on{background:#ff3d8b}
 #hud{position:fixed;left:8px;bottom:8px;max-width:min(520px,60vw);background:#0a0a1ecc;color:#fff;border-left:4px solid #ff3d8b;padding:8px 10px;border-radius:8px;font-size:14px;z-index:6}
+#err{display:none;position:fixed;left:8px;right:8px;top:calc(8px + 96px);background:#7a0f1fe6;color:#fff;padding:10px 12px;border-radius:8px;font-size:14px;z-index:7}
 #sam{position:fixed;left:50%;bottom:0;height:38vh;transform:translateX(-50%);z-index:4;pointer-events:none;filter:drop-shadow(0 4px 6px #000a)}
 #sam *{transform-box:view-box}
 @keyframes sw{0%,100%{transform:rotate(22deg)}50%{transform:rotate(-22deg)}}
@@ -23,6 +24,7 @@ button:active,button.on{background:#ff3d8b}
 </style></head><body>
 <div id="pano"></div>
 <div id="ui"></div>
+<div id="err"></div>
 <div id="hud">A preparar…</div>
 <svg id="sam" viewBox="0 0 120 200" xmlns="http://www.w3.org/2000/svg">
  <defs><clipPath id="cp"><circle cx="60" cy="58" r="22"/></clipPath></defs>
@@ -60,10 +62,13 @@ const ADDR = [
 const STEP_M = 12;               // distância entre imagens (metros)
 let pano, P = [], stops = [], info = [], i = 0, playing = false, speed = 1, follow = true, hold = 0, timer;
 
-window.gm_authFailure = () => hud('A chave não foi aceite pela Maps JavaScript API. Ativa-a no projeto e junta-a às restrições da chave.');
+const showErr = t => { const e = $('err'); e.textContent = t; e.style.display = 'block'; };
+let panoOK = false;
+window.gm_authFailure = () => showErr('A Google recusou a chave para a Maps JavaScript API. Ativa a "Maps JavaScript API" em APIs e serviços > Biblioteca e junta-a às Restrições da API da chave. Confirma também o referenciador https://godofortho.github.io/* e a faturação.');
+window.addEventListener('error', e => showErr('Erro na página: ' + e.message));
 const sc = document.createElement('script');
 sc.src = 'https://maps.googleapis.com/maps/api/js?key=' + encodeURIComponent(KEY) + '&libraries=geometry&v=weekly&callback=init';
-sc.async = true; sc.onerror = () => hud('Não consegui carregar o Google Maps.'); document.head.appendChild(sc);
+sc.async = true; sc.onerror = () => showErr('Não consegui carregar o Google Maps (rede ou chave).'); document.head.appendChild(sc);
 
 function decodePoly(str) {
   let k = 0, lat = 0, lon = 0; const out = [];
@@ -139,7 +144,9 @@ window.init = () => {
     motionTracking: false, motionTrackingControl: false, zoomControl: false, panControl: false,
     fullscreenControl: false, enableCloseButton: false, showRoadLabels: false, scrollwheel: false
   });
-  pano.addListener('status_changed', () => { if (pano.getStatus() === 'ZERO_RESULTS') hud('Sem imagens do Street View neste ponto.'); });
+  pano.addListener('status_changed', () => { const s = pano.getStatus(); if (s && s !== 'OK') showErr('Street View: ' + s + (s === 'ZERO_RESULTS' ? ' (sem imagens neste ponto)' : '')); });
+  pano.addListener('pano_changed', () => { if (pano.getPano()) { panoOK = true; $('err').style.display = 'none'; } });
+  setTimeout(() => { if (!panoOK) showErr('O Street View não carregou. Verifica na Google Cloud: Maps JavaScript API ativa, permitida na chave, e faturação associada.'); }, 8000);
   restartTimer();
   loadRoute();
 };
