@@ -21,7 +21,14 @@ button:active,button.on{background:#ff3d8b}
 <div id="pad"><span></span><button data-k="pu">▲</button><span></span><button data-k="pl">◀</button><button data-k="pd">▼</button><button data-k="pr">▶</button></div>
 <script>
 // 1) Cola aqui a tua chave Google (Map Tiles API). Não a mostres a ninguém.
-const GOOGLE_KEY = 'AIzaSyAGTwX6x2CpmUrw13_elwQM0cuNXmlE7YM';
+let GOOGLE_KEY = 'COLA_AQUI_A_TUA_CHAVE';
+// Se a chave não estiver no código, o site pede-a e guarda-a só neste dispositivo.
+try {
+  if (GOOGLE_KEY.startsWith('COLA')) {
+    GOOGLE_KEY = localStorage.getItem('gkey') || '';
+    if (!GOOGLE_KEY) { GOOGLE_KEY = (prompt('Cola aqui a tua chave Google (fica só neste dispositivo):') || '').trim(); if (GOOGLE_KEY) localStorage.setItem('gkey', GOOGLE_KEY); }
+  }
+} catch (e) {}
 
 // 2) Coordenadas APROXIMADAS. Podes corrigir marcando a tua rota no modo "Marcar rota".
 const POIS = [
@@ -116,6 +123,7 @@ async function buildSamurai() {
   addPart(0, 0.82, cyl(0.5, 0.3, 0.44, '#14142e'));          // hakama
   addPart(0, 1.3,  cyl(0.8, 0.3, 0.3, '#1f2a5a'));           // quimono
   addPart(0, 0.98, cyl(0.15, 0.33, 0.33, '#c81e2e'));        // obi
+  addPart(0, 1.8,  {ellipsoid:{radii:new Cesium.Cartesian3(0.2, 0.2, 0.22), material:C('#ffd9b0')}}); // cabeça
   addPart(0, 2.1,  cyl(0.3, 0, 0.6, '#b08a4a'));             // kasa
   limb(-0.15, 0.6, 0.6, () => legTheta(false), cyl(0.6, 0.1, 0.1, '#14142e'));  // perna esq.
   limb( 0.15, 0.6, 0.6, () => legTheta(true),  cyl(0.6, 0.1, 0.1, '#14142e'));  // perna dir.
@@ -273,6 +281,7 @@ let mode = 'go';
 mk('Modo: ir ao toque', bt => { mode = mode === 'go' ? 'route' : 'go'; bt.textContent = mode === 'go' ? 'Modo: ir ao toque' : 'Modo: marcar rota'; bt.classList.toggle('on', mode === 'route'); hud(mode === 'go' ? 'Toca no chão e o samurai vai lá.' : 'Toca nas ruas para marcar pontos e depois carrega em "Minha rota".'); });
 mk('Limpar rota', () => { custom = []; routeLine.show = false; });
 mk('⚔️ Golpe', () => strike());
+mk('🔑 Chave', () => { try { localStorage.removeItem('gkey'); } catch(e) {} location.reload(); });
 mk('📷 Minha foto', () => fileIn.click());
 
 // ---- Toque no chão ----
