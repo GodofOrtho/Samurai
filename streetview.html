@@ -65,7 +65,7 @@ const ADDR = [
 ];
 const STEP_M = 12;               // distância entre imagens (metros)
 const D2R = Math.PI / 180, EARTH = 6371000;
-let P = [], stops = [], info = [], i = 0, playing = false, speed = 1, follow = true, hold = 0, timer, baseH = 0, yaw = 0, token = 0, okOnce = false, loaded = 0;
+let P = [], stops = [], info = [], ids = [0,1,2,3], ROUTES = {}, curKey = null, routeBtns = {}, i = 0, playing = false, speed = 1, follow = true, hold = 0, timer, baseH = 0, yaw = 0, token = 0, okOnce = false, loaded = 0;
 
 const dist = (a, b) => Math.hypot((b.lat - a.lat) * D2R, (b.lon - a.lon) * D2R * Math.cos(a.lat * D2R)) * EARTH;
 const bear = (a, b) => {
@@ -95,28 +95,51 @@ function resample(line) {
   out.push(line[line.length - 1]);
   return out;
 }
-async function loadRoute() {
+const ROUTE_DEFS = {
+  est:  {label:'Hotel → Estação',     ids:[0,1]},
+  gg:   {label:'Hotel → Golden Gai',  ids:[0,2]},
+  kab:  {label:'Hotel → Kabukichō',   ids:[0,3]},
+  full: {label:'Passeio completo',    ids:[0,1,2,3]}
+};
+async function buildRoute(key) {
+  const def = ROUTE_DEFS[key], RP = [], Rstops = [0], Rinfo = [''];
+  for (let k = 0; k < def.ids.length - 1; k++) {
+    const r = await fetch('https://routes.googleapis.com/directions/v2:computeRoutes', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-Goog-Api-Key': KEY, 'X-Goog-FieldMask': 'routes.polyline.encodedPolyline,routes.distanceMeters,routes.duration'},
+      body: JSON.stringify({origin: {address: ADDR[def.ids[k]]}, destination: {address: ADDR[def.ids[k + 1]]}, travelMode: 'WALK', languageCode: 'pt-PT'})
+    });
+    const j = await r.json();
+    if (!j.routes || !j.routes.length) throw new Error((j.error && j.error.message) || 'sem resultado');
+    const rt = j.routes[0], pts = resample(decodePoly(rt.polyline.encodedPolyline));
+    RP.push(...(k === 0 ? pts : pts.slice(1)));
+    Rstops.push(RP.length - 1);
+    Rinfo.push(' (' + rt.distanceMeters + ' m, cerca de ' + Math.round(parseInt(rt.duration) / 60) + ' min a pé)');
+  }
+  return {P: RP, stops: Rstops, info: Rinfo, ids: def.ids.slice()};
+}
+async function selectRoute(key, autoplay) {
   try {
-    hud('A calcular o caminho a pé…');
-    P = []; stops = [0]; info = [''];
-    for (let s = 0; s < ADDR.length - 1; s++) {
-      const r = await fetch('https://routes.googleapis.com/directions/v2:computeRoutes', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json', 'X-Goog-Api-Key': KEY, 'X-Goog-FieldMask': 'routes.polyline.encodedPolyline,routes.distanceMeters,routes.duration'},
-        body: JSON.stringify({origin: {address: ADDR[s]}, destination: {address: ADDR[s + 1]}, travelMode: 'WALK', languageCode: 'pt-PT'})
-      });
-      const j = await r.json();
-      if (!j.routes || !j.routes.length) throw new Error((j.error && j.error.message) || 'sem resultado');
-      const rt = j.routes[0], pts = resample(decodePoly(rt.polyline.encodedPolyline));
-      P.push(...(s === 0 ? pts : pts.slice(1)));
-      stops.push(P.length - 1);
-      info.push(' (' + rt.distanceMeters + ' m, cerca de ' + Math.round(parseInt(rt.duration) / 60) + ' min a pé)');
-    }
+    playing = false; hold = 0; setPlay();
+    if (!ROUTES[key]) { hud('A calcular o caminho a pé…'); ROUTES[key] = await buildRoute(key); }
+    const r = ROUTES[key]; curKey = key;
+    P = r.P.slice(); stops = r.stops.slice(); info = r.info.slice(); ids = r.ids.slice();
+    Object.keys(routeBtns).forEach(k => routeBtns[k].classList.toggle('on', k === key));
     show(0);
-    hud('Pronto: ' + P.length + ' imagens ao longo do caminho. Carrega em ▶ Andar.');
+    hud(ROUTE_DEFS[key].label + ': ' + P.length + ' imagens. ' + (autoplay ? 'A andar…' : 'Carrega em ▶ Andar.'));
+    if (autoplay) { playing = true; setPlay(); }
   } catch (e) {
     showErr('Não consegui o caminho: ativa a Routes API e permite-a na chave. (' + e.message + ')');
   }
+}
+function reverseRoute() {
+  if (!P.length) return;
+  const n = stops.length - 1, oi = info;
+  P = P.slice().reverse(); ids = ids.slice().reverse();
+  info = ['']; for (let k = 1; k <= n; k++) info.push(oi[n - k + 1]);
+  stops = stops.map(x => P.length - 1 - x).reverse();
+  playing = false; hold = 0; setPlay(); show(0);
+  hud('Sentido invertido: ' + NAMES[ids[0]] + ' → ' + NAMES[ids[n]] + '. Carrega em ▶ Andar.');
 }
 // Pede a fotografia do Street View como imagem normal (Street View Static API)
 function load() {
@@ -143,7 +166,7 @@ function tick() {
   if (i >= P.length - 1) { playing = false; setPlay(); $('sam').classList.remove('walk'); hud('Chegaste ao destino!'); return; }
   show(i + 1);
   const k = stops.indexOf(i);
-  if (k > 0) { hud(NAMES[k] + ': ' + TXT[k] + info[k]); hold = Date.now() + 3500; }
+  if (k > 0) { hud(NAMES[ids[k]] + ': ' + TXT[ids[k]] + info[k]); hold = Date.now() + 3500; }
 }
 function restartTimer() { clearInterval(timer); timer = setInterval(tick, 1400 / speed); }
 let playBtn;
@@ -162,9 +185,10 @@ wrap.addEventListener('pointermove', e => {
 
 const ui = $('ui');
 const mk = (t, fn) => { const b = document.createElement('button'); b.textContent = t; b.onclick = () => fn(b); ui.appendChild(b); return b; };
-playBtn = mk('▶ Andar', () => { if (!P.length) { loadRoute(); return; } if (i >= P.length - 1) show(0); playing = !playing; hold = 0; setPlay(); });
-mk('⏮ Início', () => { show(0); hud(NAMES[0] + ': ' + TXT[0]); });
-NAMES.forEach((n, k) => mk(n.replace('Estação ', ''), () => { if (!P.length) return; show(stops[k]); hold = Date.now() + 2500; hud(n + ': ' + TXT[k] + info[k]); }));
+playBtn = mk('▶ Andar', () => { if (!P.length) { selectRoute(curKey || 'full', true); return; } if (i >= P.length - 1) show(0); playing = !playing; hold = 0; setPlay(); });
+mk('⏮ Início', () => { show(0); hud(NAMES[ids[0]] + ': ' + TXT[ids[0]]); });
+Object.keys(ROUTE_DEFS).forEach(k => { routeBtns[k] = mk(ROUTE_DEFS[k].label, () => selectRoute(k, true)); });
+mk('⇄ Sentido', () => reverseRoute());
 mk('⏩ Velocidade', b => { speed = speed === 1 ? 2 : speed === 2 ? 3 : 1; b.textContent = '⏩ x' + speed; restartTimer(); });
 mk('👁 Olhar livre', b => { follow = !follow; b.classList.toggle('on', !follow); if (follow) { yaw = 0; load(); } });
 mk('⚔️ Golpe', () => { const s = $('sam'); s.classList.remove('slash'); void s.getBoundingClientRect(); s.classList.add('slash'); setTimeout(() => s.classList.remove('slash'), 950); });
@@ -185,6 +209,6 @@ fileIn.onchange = () => {
 mk('📷 Foto', () => fileIn.click());
 mk('🔑 Chave', () => { try { localStorage.removeItem('gkey'); } catch (e) {} location.reload(); });
 restartTimer();
-loadRoute();
+selectRoute('full', false);
 </script>
 </body></html>
