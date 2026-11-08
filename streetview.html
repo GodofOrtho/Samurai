@@ -4,7 +4,8 @@
 <title>Samurai em Shinjuku - Street View</title>
 <style>
 html,body{height:100%;margin:0;background:#000;font-family:system-ui,sans-serif;overflow:hidden}
-#pano{position:fixed;inset:0}
+#wrap{position:fixed;inset:0;touch-action:none;background:#000}
+#view{width:100%;height:100%;object-fit:cover;display:block;user-select:none;-webkit-user-drag:none}
 #ui{position:fixed;top:8px;left:8px;right:8px;display:flex;gap:6px;flex-wrap:wrap;z-index:5}
 button{background:#14142dcc;color:#fff;border:1px solid #ff3d8b;border-radius:8px;padding:8px 10px;font-size:14px;cursor:pointer}
 button:active,button.on{background:#ff3d8b}
@@ -22,9 +23,10 @@ button:active,button.on{background:#ff3d8b}
 .slash #armR{animation:arm .9s ease-in-out 1 !important}
 .slash #blade{animation:bl .9s ease-in-out 1}
 </style></head><body>
-<div id="pano"></div>
+<div id="wrap"><img id="view" alt=""></div>
 <div id="ui"></div>
 <div id="err"></div>
+<div id="dbg" style="position:fixed;left:8px;bottom:76px;color:#fff;font-size:12px;opacity:.85;z-index:6"></div>
 <div id="hud">A preparar…</div>
 <svg id="sam" viewBox="0 0 120 200" xmlns="http://www.w3.org/2000/svg">
  <defs><clipPath id="cp"><circle cx="60" cy="58" r="22"/></clipPath></defs>
@@ -46,10 +48,12 @@ button:active,button.on{background:#ff3d8b}
 <script>
 const $ = id => document.getElementById(id);
 const hud = t => $('hud').textContent = t;
+const showErr = t => { const e = $('err'); e.textContent = t; e.style.display = 'block'; };
 let KEY = '';
 try { KEY = localStorage.getItem('gkey') || ''; } catch (e) {}
 if (!KEY) { KEY = (prompt('Cola aqui a tua chave Google (fica só neste dispositivo):') || '').trim(); if (KEY) { try { localStorage.setItem('gkey', KEY); } catch (e) {} } }
 try { const f = localStorage.getItem('samuraiFace'); if (f) $('face').setAttribute('href', f); } catch (e) {}
+window.addEventListener('error', e => showErr('Erro na página: ' + e.message));
 
 const NAMES = ['Hotel Wanokaede', 'Estação Shinjuku-sanchome', 'Golden Gai', 'Kabukichō (Godzilla)'];
 const TXT = ['Ponto de partida.', 'Linhas Marunouchi, Fukutoshin e Toei Shinjuku.', 'Centenas de barzinhos minúsculos. Vê o couvert à porta.', 'Néons e clubes de hostess. Ignora angariadores.'];
@@ -60,16 +64,15 @@ const ADDR = [
   'Godzilla Head, Shinjuku Toho Building, Kabukicho, Tokyo, Japan'
 ];
 const STEP_M = 12;               // distância entre imagens (metros)
-let pano, P = [], stops = [], info = [], i = 0, playing = false, speed = 1, follow = true, hold = 0, timer;
+const D2R = Math.PI / 180, EARTH = 6371000;
+let P = [], stops = [], info = [], i = 0, playing = false, speed = 1, follow = true, hold = 0, timer, baseH = 0, yaw = 0, token = 0, okOnce = false, loaded = 0;
 
-const showErr = t => { const e = $('err'); e.textContent = t; e.style.display = 'block'; };
-let panoOK = false;
-window.gm_authFailure = () => showErr('A Google recusou a chave para a Maps JavaScript API. Ativa a "Maps JavaScript API" em APIs e serviços > Biblioteca e junta-a às Restrições da API da chave. Confirma também o referenciador https://godofortho.github.io/* e a faturação.');
-window.addEventListener('error', e => showErr('Erro na página: ' + e.message));
-const sc = document.createElement('script');
-sc.src = 'https://maps.googleapis.com/maps/api/js?key=' + encodeURIComponent(KEY) + '&libraries=geometry&v=weekly&callback=init';
-sc.async = true; sc.onerror = () => showErr('Não consegui carregar o Google Maps (rede ou chave).'); document.head.appendChild(sc);
-
+const dist = (a, b) => Math.hypot((b.lat - a.lat) * D2R, (b.lon - a.lon) * D2R * Math.cos(a.lat * D2R)) * EARTH;
+const bear = (a, b) => {
+  const y = Math.sin((b.lon - a.lon) * D2R) * Math.cos(b.lat * D2R);
+  const x = Math.cos(a.lat * D2R) * Math.sin(b.lat * D2R) - Math.sin(a.lat * D2R) * Math.cos(b.lat * D2R) * Math.cos((b.lon - a.lon) * D2R);
+  return (Math.atan2(y, x) / D2R + 360) % 360;
+};
 function decodePoly(str) {
   let k = 0, lat = 0, lon = 0; const out = [];
   while (k < str.length) {
@@ -79,15 +82,15 @@ function decodePoly(str) {
     sh = 0; r = 0;
     do { b = str.charCodeAt(k++) - 63; r |= (b & 31) << sh; sh += 5; } while (b >= 32);
     lon += (r & 1) ? ~(r >> 1) : (r >> 1);
-    out.push(new google.maps.LatLng(lat / 1e5, lon / 1e5));
+    out.push({lat: lat / 1e5, lon: lon / 1e5});
   }
   return out;
 }
 function resample(line) {
-  const sp = google.maps.geometry.spherical, out = [];
+  const out = [];
   for (let a = 0; a < line.length - 1; a++) {
-    const d = sp.computeDistanceBetween(line[a], line[a + 1]), n = Math.max(1, Math.round(d / STEP_M));
-    for (let k = 0; k < n; k++) out.push(sp.interpolate(line[a], line[a + 1], k / n));
+    const d = dist(line[a], line[a + 1]), n = Math.max(1, Math.round(d / STEP_M));
+    for (let k = 0; k < n; k++) out.push({lat: line[a].lat + (line[a + 1].lat - line[a].lat) * k / n, lon: line[a].lon + (line[a + 1].lon - line[a].lon) * k / n});
   }
   out.push(line[line.length - 1]);
   return out;
@@ -112,17 +115,26 @@ async function loadRoute() {
     show(0);
     hud('Pronto: ' + P.length + ' imagens ao longo do caminho. Carrega em ▶ Andar.');
   } catch (e) {
-    hud('Não consegui o caminho: ativa a Routes API e permite-a na chave. (' + e.message + ')');
+    showErr('Não consegui o caminho: ativa a Routes API e permite-a na chave. (' + e.message + ')');
   }
+}
+// Pede a fotografia do Street View como imagem normal (Street View Static API)
+function load() {
+  if (!P.length) return;
+  const p = P[i], h = (baseH + yaw + 360) % 360, my = ++token;
+  const url = 'https://maps.googleapis.com/maps/api/streetview?size=640x640&location=' + p.lat.toFixed(6) + ',' + p.lon.toFixed(6) +
+    '&heading=' + h.toFixed(0) + '&pitch=5&fov=100&radius=50&source=outdoor&return_error_code=true&key=' + encodeURIComponent(KEY);
+  const im = new Image();
+  im.onload = () => { if (my !== token) return; $('view').src = url; okOnce = true; loaded++; $('err').style.display = 'none'; $('dbg').textContent = p.lat.toFixed(5) + ', ' + p.lon.toFixed(5) + ' · direção ' + h.toFixed(0) + '° · imagens: ' + loaded; };
+  im.onerror = () => { if (my !== token) return; if (!okOnce) showErr('A imagem do Street View não carregou. Ativa a "Street View Static API" em APIs e serviços > Biblioteca, junta-a às Restrições da API da chave e confirma o referenciador https://godofortho.github.io/*.'); else $('dbg').textContent = 'sem imagem neste ponto, a saltar…'; };
+  im.src = url;
 }
 function show(k) {
   if (!P.length) return;
   i = Math.max(0, Math.min(P.length - 1, k));
-  pano.setPosition(P[i]);
-  if (follow) {
-    const nx = P[Math.min(P.length - 1, i + 2)];
-    if (nx && !nx.equals(P[i])) pano.setPov({heading: google.maps.geometry.spherical.computeHeading(P[i], nx), pitch: 0});
-  }
+  const nx = P[Math.min(P.length - 1, i + 2)];
+  if (follow && nx && dist(P[i], nx) > 0.5) baseH = bear(P[i], nx);
+  load();
 }
 function tick() {
   const walking = playing && Date.now() >= hold;
@@ -137,19 +149,16 @@ function restartTimer() { clearInterval(timer); timer = setInterval(tick, 1400 /
 let playBtn;
 function setPlay() { playBtn.textContent = playing ? '⏸ Parar' : '▶ Andar'; }
 
-window.init = () => {
-  pano = new google.maps.StreetViewPanorama($('pano'), {
-    position: {lat: 35.6945, lng: 139.7095}, pov: {heading: 0, pitch: 0},
-    disableDefaultUI: true, clickToGo: false, linksControl: false, addressControl: false,
-    motionTracking: false, motionTrackingControl: false, zoomControl: false, panControl: false,
-    fullscreenControl: false, enableCloseButton: false, showRoadLabels: false, scrollwheel: false
-  });
-  pano.addListener('status_changed', () => { const s = pano.getStatus(); if (s && s !== 'OK') showErr('Street View: ' + s + (s === 'ZERO_RESULTS' ? ' (sem imagens neste ponto)' : '')); });
-  pano.addListener('pano_changed', () => { if (pano.getPano()) { panoOK = true; $('err').style.display = 'none'; } });
-  setTimeout(() => { if (!panoOK) showErr('O Street View não carregou. Verifica na Google Cloud: Maps JavaScript API ativa, permitida na chave, e faturação associada.'); }, 8000);
-  restartTimer();
-  loadRoute();
-};
+// Olhar à volta com o dedo
+let dragX = null, dragT;
+const wrap = $('wrap');
+wrap.addEventListener('pointerdown', e => { dragX = e.clientX; });
+wrap.addEventListener('pointermove', e => {
+  if (dragX === null) return;
+  yaw = (yaw - (e.clientX - dragX) * 0.25 + 360) % 360; dragX = e.clientX;
+  clearTimeout(dragT); dragT = setTimeout(load, 120);
+});
+['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => wrap.addEventListener(ev, () => { dragX = null; }));
 
 const ui = $('ui');
 const mk = (t, fn) => { const b = document.createElement('button'); b.textContent = t; b.onclick = () => fn(b); ui.appendChild(b); return b; };
@@ -157,7 +166,7 @@ playBtn = mk('▶ Andar', () => { if (!P.length) { loadRoute(); return; } if (i 
 mk('⏮ Início', () => { show(0); hud(NAMES[0] + ': ' + TXT[0]); });
 NAMES.forEach((n, k) => mk(n.replace('Estação ', ''), () => { if (!P.length) return; show(stops[k]); hold = Date.now() + 2500; hud(n + ': ' + TXT[k] + info[k]); }));
 mk('⏩ Velocidade', b => { speed = speed === 1 ? 2 : speed === 2 ? 3 : 1; b.textContent = '⏩ x' + speed; restartTimer(); });
-mk('👁 Olhar livre', b => { follow = !follow; b.classList.toggle('on', !follow); });
+mk('👁 Olhar livre', b => { follow = !follow; b.classList.toggle('on', !follow); if (follow) { yaw = 0; load(); } });
 mk('⚔️ Golpe', () => { const s = $('sam'); s.classList.remove('slash'); void s.getBoundingClientRect(); s.classList.add('slash'); setTimeout(() => s.classList.remove('slash'), 950); });
 const fileIn = document.createElement('input'); fileIn.type = 'file'; fileIn.accept = 'image/*'; fileIn.style.display = 'none'; document.body.appendChild(fileIn);
 fileIn.onchange = () => {
@@ -175,5 +184,7 @@ fileIn.onchange = () => {
 };
 mk('📷 Foto', () => fileIn.click());
 mk('🔑 Chave', () => { try { localStorage.removeItem('gkey'); } catch (e) {} location.reload(); });
+restartTimer();
+loadRoute();
 </script>
 </body></html>
