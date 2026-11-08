@@ -33,6 +33,7 @@ const viewer = new Cesium.Viewer('c', {
   fullscreenButton:false, infoBox:false, selectionIndicator:false
 });
 viewer.scene.skyAtmosphere.show = true;
+viewer.clock.currentTime = Cesium.JulianDate.fromIso8601('2026-11-08T03:00:00Z'); viewer.clock.shouldAnimate = false;
 let tiles;
 (async () => {
   tiles = await Cesium.createGooglePhotorealistic3DTileset({onlyUsingWithGoogleGeocoder:true});
